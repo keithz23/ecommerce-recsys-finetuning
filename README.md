@@ -191,4 +191,64 @@ python3.12.3 -m venv product-recommendation-system-env
 source product-recommendation-system-env/bin/activate  # On Windows: .\product-recommendation-system-env\Scripts\activate
 pip install -r requirements.txt
 ```
+
+## Local Demo UI
+
+Run the lightweight recommendation demo from the project root:
+
+```bash
+python demo_app.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The demo supports:
+
+- **Rank-Based** recommendations
+- **Content-Based** recommendations
+- **SVD Collaborative Filtering** recommendations
+- **Hybrid SVD + Rank** recommendations
+
+If `data/processed/product_metadata.csv` is unavailable, it uses fallback
+metadata derived from ratings so the UI remains runnable.
+
+### Demo UI Controls
+
+| Control | Description |
+|---------|-------------|
+| `User` | Selects the user ID to generate recommendations for. |
+| `Method` | Selects the recommendation algorithm used for the demo. |
+| `Top N` | Controls how many recommended products are returned. For example, `5` shows the top 5 products, while `10` shows the top 10. |
+| `Generate Recommendations` | Runs the selected recommender and refreshes the results table. |
+
+### Demo UI Results
+
+The top summary cards show the dataset currently loaded by the demo:
+
+| Card | Description |
+|------|-------------|
+| `Ratings` | Number of user-product rating interactions. |
+| `Users` | Number of unique users. |
+| `Products` | Number of unique products. |
+| `Average Rating` | Average rating across the loaded dataset. |
+
+The recommendation table shows:
+
+| Column | Description |
+|--------|-------------|
+| `#` | Recommendation rank. `1` is the highest-ranked product. |
+| `Product` | Product name or product ID. With fallback metadata, product names are generated from `prod_id`. |
+| `Category` | Product category. With fallback metadata, this defaults to `Electronics`. |
+| `Rating` | Average product rating, when available. |
+| `Count` | Number of ratings for that product, when available. |
+| `Score` | Model score used to rank recommendations. Higher is better within the same method. |
+
+Do not compare `Score` directly across different methods, because Rank-Based,
+Content-Based, SVD, and Hybrid models calculate scores differently. Use the
+notebook metrics such as `RMSE`, `Precision@K`, `Recall@K`, `MRR`, `MAP`, and
+`Hit Rate@K` to compare model quality.
 ---
