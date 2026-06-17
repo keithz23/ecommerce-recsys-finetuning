@@ -631,6 +631,11 @@ class RecommendationData:
             for col in ["prod_id", "product_name", "category", "brand", "avg_rating", "rating_count"]
             if col in self.product_metadata.columns
         ]
+        metadata_cols = [
+            col
+            for col in metadata_cols
+            if col == "prod_id" or col not in recommendations.columns
+        ]
         metadata = self.product_metadata[metadata_cols].drop_duplicates("prod_id")
         merged = recommendations.merge(metadata, on="prod_id", how="left")
         return merged
