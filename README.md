@@ -30,6 +30,7 @@ In the competitive e-commerce industry, enhancing customer satisfaction and driv
 
 - [Introduction](#introduction)
 - [Objective](#objective)
+- [Model Survey and System Workflow](#model-survey-and-system-workflow)
 - [Key Business Metrics](#key-business-metrics)
 - [Exploratory Data Analysis](#exploratory-data-analysis)
 - [Data Insights](#data-insights)
@@ -50,6 +51,112 @@ The objective is to build a recommendation system to suggest products to Amazon 
 - **Item-Item Collaborative Filtering**: Recommends items similar to those a user has interacted with by analyzing item-to-item similarities.
 - **Matrix Factorization-Based Collaborative Filtering**: Uses matrix factorization to uncover latent factors in user-item interactions for personalized recommendations.
 - **Hybrid Recommendation System**: Combines multiple recommendation techniques to enhance accuracy and relevance in a hybrid system.
+
+## Model Survey and System Workflow
+
+### Model Survey
+
+| Model | Principle | Advantages | Disadvantages | Best Applied To |
+|-------|-----------|------------|---------------|-----------------|
+| **Rank-Based Recommendation** | Ranks products using global signals such as average rating, number of ratings, and Bayesian average. It does not require user-specific preferences. | Simple, fast, explainable, works for new users, useful as a baseline. | Not highly personalized, tends to recommend already-popular products, may reduce recommendation diversity. | New users, homepage trending products, fallback recommendations, cold-start scenarios. |
+| **Collaborative Filtering - User/User and Item/Item KNN** | Finds similar users or similar products from the user-item rating matrix, then recommends products based on those neighbors. | Personalized, does not require product metadata, intuitive for recommendation explanation. | Sensitive to sparse data, can be slow with many users/items, struggles with new users and new products. | Users with enough rating history, product-to-product recommendation, "users like you also liked" flows. |
+| **Matrix Factorization - SVD** | Decomposes the user-item interaction matrix into latent user and item factors, then predicts unknown ratings. | Strong personalization, handles sparse matrices better than basic KNN, usually performs well for rating prediction. | Less explainable, still needs historical interactions, does not solve item cold-start without metadata. | Personalized ranking for active users, rating prediction, main collaborative filtering model. |
+| **Content-Based Recommendation** | Uses product attributes such as category, brand, title, and description to recommend items similar to what the user viewed, bought, or rated highly. | Can recommend new or less popular items if metadata exists, more explainable by product attributes, useful for cold-start items. | Requires reliable metadata, quality depends on feature engineering, may over-specialize recommendations. | Product catalogs with category/brand/description metadata, cold-start products, similar-item discovery. |
+| **Hybrid Recommendation** | Combines collaborative filtering scores with rank-based or content-based scores. In this project, the demo supports SVD + Rank. | Balances personalization and popularity, more robust than a single model, can reduce cold-start weakness. | More complex to tune, weighting strategy affects results, harder to explain than one model. | Production-style recommendation engine, mixed user segments, balanced recommendation quality. |
+
+### System Workflow
+
+```mermaid
+flowchart LR
+    A["Raw Data"] --> B["Data Cleaning"]
+    B --> C["User-Item Matrix"]
+    C --> D["Model Training"]
+    D --> E["Model Files .pkl"]
+    E --> F["Recommendation Engine"]
+    F --> G["Top-N Output"]
+    G --> H["UI Demo"]
+```
+
+### Data Processing Steps
+
+| Step | Action | Input | Output |
+|------|--------|-------|--------|
+| **Step 1 - Load and inspect** | Read all CSV files, print shape, check null values, inspect duplicates, run `df.info()`, `df.isnull().sum()`, `df.describe()`. | Raw CSV files from `data/raw`. | Initial combined DataFrame with `user_id`, `prod_id`, `rating`, and `timestamp`. |
+| **Step 2 - Filter sparse users/items** | Remove users and products with too few ratings. This improves signal quality because users/items with very few interactions do not provide enough information for recommendation. | Combined raw DataFrame. | Filtered interaction dataset. In this repo, the processed dataset contains **78,798 ratings**, **1,992 users**, and **5,402 products**. |
+| **Step 3 - Normalize identifiers** | Convert timestamp or ID fields when needed, encode user/product IDs as internal indexes for modeling, and keep raw IDs for display. | Filtered interaction dataset. | Modeling-ready DataFrame and ID mappings. |
+| **Step 4 - Build user-item matrix** | Create a user-item interaction structure using a pivot table, sparse matrix, or Surprise `Dataset.load_from_df`. | `user_id`, `prod_id`, `rating`. | User-item matrix or Surprise trainset. |
+| **Step 5 - Train/test split** | Split data into train/test sets, commonly using `80/20` with a fixed `random_state`. | Modeling-ready interactions. | Training set for fitting models and test set for evaluation. |
+
+### Pipeline Inputs and Outputs
+
+| Step | Input | Output | Description |
+|------|-------|--------|-------------|
+| **Raw Data** | Amazon rating CSV files in `data/raw` with `user_id`, `prod_id`, `rating`, and `timestamp`. | Combined raw ratings DataFrame. | Loads all raw rating parts into one dataset. |
+| **Data Cleaning** | Combined raw ratings DataFrame. | Cleaned interaction data. | Removes invalid records, handles duplicates/missing values, and standardizes columns. |
+| **Feature Engineering** | Cleaned interaction data. | Modeling dataset and optional product metadata. | Filters users/products by interaction thresholds, computes rating counts, average ratings, Bayesian scores, and metadata features when available. |
+| **Model Training** | Processed interactions: `user_id`, `prod_id`, `rating`. | Trained Rank-Based, CF/SVD, Content-Based, and Hybrid recommenders. | Fits or prepares each recommendation strategy. Rank-Based computes product scores; CF/SVD learns user-item patterns; Content-Based builds metadata similarity; Hybrid blends scores. |
+| **Recommendation Engine** | User ID, selected method, Top N value, trained model outputs. | Ranked list of recommended products. | Generates top-N products for a selected user and recommendation method. |
+| **UI Demo** | Recommendation API response. | Interactive recommendation table. | Lets users choose a user, model method, and Top N, then displays ranked recommendations with highlighted important columns. |
+
+### Component Responsibilities
+
+| Component | Role | Input | Output |
+|-----------|------|-------|--------|
+| **Data Cleaning** | Ensures ratings are valid, removes unusable interactions, and prepares the dataset for modeling. | Raw rating CSV files. | Cleaned DataFrame. |
+| **User-Item Matrix** | Converts interaction records into the structure required by recommendation algorithms. | Cleaned `user_id`, `prod_id`, `rating` records. | Sparse matrix, pivot table, or Surprise trainset. |
+| **Model Training** | Fits recommendation models or computes ranking scores. | User-item matrix or processed interaction data. | Trained model object or product score table. |
+| **Model Files** | Stores trained models for reuse without retraining. | Trained model object. | `.pkl` model artifact, such as `models/final_model_svd.pkl`. |
+| **Recommendation Engine** | Receives a selected user and method, scores unseen products, and sorts the results. | User ID, Top N, selected method, model outputs. | Ranked Top-N recommendation list. |
+| **UI Demo** | Provides an interactive way to test recommendations. | API response from the recommendation engine. | Recommendation table with highlighted important columns. |
+
+### Model Input and Output
+
+| Model | Main Input | Main Output |
+|-------|------------|-------------|
+| **Rank-Based** | Product-level `avg_rating`, `rating_count`, and Bayesian average score. | Top-N globally strong products not yet seen by the selected user. |
+| **User/User CF** | User-item rating matrix. | Products liked by users with similar rating behavior. |
+| **Item/Item CF** | User-item rating matrix. | Products similar to items the user has already interacted with. |
+| **SVD CF** | User-item rating matrix. | Predicted rating score for unseen user-product pairs. |
+| **Content-Based** | User history plus product metadata such as category, brand, title, and description. | Products with similar content attributes to the user's history. |
+| **Hybrid** | SVD predicted score plus rank-based product score. | Balanced personalized recommendations. |
+
+### Required Real Output
+
+The project must produce real recommendation output, not only model evaluation
+metrics. At minimum, one trained or computed model should return Top-N products
+for a selected user.
+
+Example Top-N output from the local demo using Rank-Based recommendation:
+
+| User ID | Rank | Product ID | Predicted Score |
+|---------|------|------------|-----------------|
+| `A6FIAB28IS79` | 1 | `B003ZYF3M8` | 4.8916 |
+| `A6FIAB28IS79` | 2 | `0132793040` | 4.8642 |
+| `A6FIAB28IS79` | 3 | `B001BTCSI6` | 4.8557 |
+| `A6FIAB28IS79` | 4 | `B0007WK8KS` | 4.8325 |
+| `A6FIAB28IS79` | 5 | `B008G2GBN4` | 4.8325 |
+
+The UI displays the same idea as:
+
+```text
+User ID | Product ID | Predicted Score | Rank
+```
+
+If the web UI cannot be run in time, the notebook output is still acceptable as
+long as it shows a concrete User ID, Product ID list, and predicted score or
+rank. A screenshot of the notebook or UI output can be used in presentation
+slides as proof of working Top-N recommendations.
+
+### Tech Stack
+
+| Component | Tools |
+|-----------|-------|
+| Data preprocessing | Python 3.x, Pandas |
+| Feature engineering | Pandas, Scikit-learn TF-IDF for text metadata |
+| Collaborative filtering | Surprise KNN, Surprise SVD |
+| Content-based recommendation | Pandas, Scikit-learn TF-IDF |
+| Model persistence | Pickle `.pkl` files |
+| UI | Current repo: `demo_app.py` local web UI. Streamlit can be used as an alternative UI layer if required. |
 
 ## Key Business Metrics
 
