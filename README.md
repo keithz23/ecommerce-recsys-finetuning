@@ -36,6 +36,7 @@ In the competitive e-commerce industry, enhancing customer satisfaction and driv
 - [Data Insights](#data-insights)
 - [Models’ Performance](#models-performance)
 - [Business Recommendations](#business-recommendations)
+- [Changing Dataset Inputs](#changing-dataset-inputs)
 - [Repository Structure](#repository-structure)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -243,6 +244,112 @@ Enhancing the recommendation system is expected to boost customer engagement, co
    - **Target Low-Engagement Segments**: Identify and re-engage less active users with tailored recommendations to reduce Churn Rate and enhance CLV.
    - **Diversify Product Promotion**: Promote lesser-known products alongside top sellers using a novelty factor. Track sales growth and AOV to assess the impact on customer engagement and satisfaction.
 
+## Changing Dataset Inputs
+
+This project currently has two dataset flows:
+
+| Notebook/App | Current default input | Recommended new input |
+|--------------|-----------------------|------------------------|
+| `notebooks/product_recommendation_system.ipynb` | `data/raw/amazon_product_ratings_part_*.csv` | `data/input/interaction_train.csv` + `data/input/interaction_test.csv` |
+| `notebooks/popularity.ipynb` | `/content/data/*.csv` Colab paths | `data/input/*.csv` + generated `data/interim/popularity_train_dataset.csv` |
+| `demo_app.py` | `data/processed/processed_data.pkl`, then fallback to `data/raw/*.csv` | Regenerated `data/processed/processed_data.pkl` |
+
+### New Canonical Dataset Files
+
+Use these files as the main replacement dataset:
+
+```text
+data/input/interaction_train.csv
+data/input/interaction_test.csv
+```
+
+They use this schema:
+
+```text
+UserId, ProductId, Rating, Timestamp, Date, VerifiedPurchase, HelpfulVote, SourceCategory, IsRelevant, Split
+```
+
+### How To Change `product_recommendation_system.ipynb`
+
+The main notebook currently loads the legacy Amazon split files in the early data-loading cell:
+
+```python
+folder_path = "../data/raw"
+raw_data = read_all_csv_files(folder_path=folder_path, header=None)
+```
+
+and then assumes the raw files have no header:
+
+```python
+raw_data.columns = ["user_id", "prod_id", "rating", "timestamp"]
+raw_data = raw_data.drop("timestamp", axis=1)
+df = raw_data.copy(deep=True)
+```
+
+To use the new dataset, replace those loading cells with:
+
+```python
+from pathlib import Path
+import pandas as pd
+
+DATA_INPUT_DIR = Path("../data/input")
+
+train_df = pd.read_csv(DATA_INPUT_DIR / "interaction_train.csv", low_memory=False)
+test_df = pd.read_csv(DATA_INPUT_DIR / "interaction_test.csv", low_memory=False)
+
+raw_data = pd.concat([train_df, test_df], ignore_index=True)
+
+df = raw_data.rename(
+    columns={
+        "UserId": "user_id",
+        "ProductId": "prod_id",
+        "Rating": "rating",
+        "Timestamp": "timestamp",
+    }
+)
+
+df = df[["user_id", "prod_id", "rating"]].copy()
+df["rating"] = pd.to_numeric(df["rating"], errors="coerce")
+df = df.dropna(subset=["user_id", "prod_id", "rating"])
+```
+
+After this change, the existing model cells can continue to use:
+
+```python
+df[["user_id", "prod_id", "rating"]]
+```
+
+The affected models are:
+
+| Model section | Uses |
+|---------------|------|
+| Rank-Based | `df` grouped by `prod_id` and `rating` |
+| User-User CF | `df[["user_id", "prod_id", "rating"]]` |
+| Item-Item CF | `df[["user_id", "prod_id", "rating"]]` |
+| SVD | `df[["user_id", "prod_id", "rating"]]` |
+| Hybrid | Rank model output + CF/SVD output |
+| Content-Based | `df` plus `data/processed/product_metadata.csv` if available |
+
+Important: the notebook later calls `train_test_split(...)`. If you combine `interaction_train.csv` and `interaction_test.csv`, the notebook will create a new random split and will not preserve the original `Split` column. To preserve the provided train/test split, the Surprise `trainset` and `testset` creation cells must be rewritten separately.
+
+### Outputs To Regenerate
+
+After changing the dataset in `product_recommendation_system.ipynb`, regenerate these files:
+
+```text
+data/processed/processed_data.pkl
+models/final_model_svd.pkl
+reports/figures/*.png
+```
+
+The demo uses `data/processed/processed_data.pkl` first. If that file is not regenerated, the demo may still show results from the old dataset.
+
+More detailed migration notes are available in:
+
+```text
+docs/DATASET_INPUT_OUTPUT_GUIDE.md
+```
+
 ## Repository Structure
 ```
 ├── LICENSE            <- Project's open-source license details.
@@ -265,6 +372,15 @@ Enhancing the recommendation system is expected to boost customer engagement, co
 │   └── figures        <- Graphics and figures for reports.
 │
 ├── src                <- Source code for the project.
+```
+
+Additional dataset directories used by the current migration:
+
+```text
+data/input/          <- Canonical replacement input datasets.
+data/interim/        <- Generated intermediate datasets such as popularity_train_dataset.csv.
+docs/                <- Dataset migration and project guides.
+reports/popularity/  <- Generated Popularity A/B/C reports and charts.
 ```
 
 ## Requirements
