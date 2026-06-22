@@ -262,7 +262,7 @@ class CFRecommendationSystem:
             data=data,
             measures=measures,
             cv=cv,
-            n_jobs=-1,
+            n_jobs=1,
             verbose=True,
         )
 
@@ -322,7 +322,7 @@ class CFRecommendationSystem:
             measures = ["rmse"]  # Default measure
 
         self.gs = GridSearchCV(
-            self.algo_class, param_grid=param_grid, measures=measures, cv=cv, n_jobs=-1
+            self.algo_class, param_grid=param_grid, measures=measures, cv=cv, n_jobs=1
         )
         self.gs.fit(self.data)
         self.best_score = self.gs.best_score[measures[0]]
