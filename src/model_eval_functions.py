@@ -1,10 +1,10 @@
 """
 model_eval_functions.py
 
-This module contains custom functions for model evaluation, recommendation, and analysis 
-in recommendation systems. The functions support various tasks such as calculating ranking and quality metrics, 
-running grid searches, and generating personalized product recommendations. 
-These functions are designed to enhance data science workflows by integrating with standard libraries 
+This module contains custom functions for model evaluation, recommendation, and analysis
+in recommendation systems. The functions support various tasks such as calculating ranking and quality metrics,
+running grid searches, and generating personalized product recommendations.
+These functions are designed to enhance data science workflows by integrating with standard libraries
 such as NumPy, Pandas, and the Surprise library for recommendation algorithms.
 
 The module is structured as follows:
@@ -234,8 +234,8 @@ def get_recommendations(
     recommendations = []
 
     # Create an user item interactions matrix
-    user_item_interactions_matrix = data.pivot(
-        index="user_id", columns="prod_id", values="rating"
+    user_item_interactions_matrix = data.pivot_table(
+        index="user_id", columns="prod_id", values="rating", aggfunc="mean"
     )
 
     # Extracte those product ids which the user_id has not interacted yet
@@ -308,7 +308,7 @@ def baseline_gridsearch(
         param_grid = param_grids.get(name, {})
 
         # Initialize GridSearchCV for the current algorithm
-        model_gs = GridSearchCV(algo, param_grid, measures=measures, cv=cv, n_jobs=-1)
+        model_gs = GridSearchCV(algo, param_grid, measures=measures, cv=cv, n_jobs=1)
         model_gs.fit(data)
         models[name] = model_gs
 
