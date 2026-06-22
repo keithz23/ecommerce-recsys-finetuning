@@ -230,18 +230,20 @@ def get_recommendations(
     - pd.DataFrame: A DataFrame containing the top N recommended products for the given 'user_id', including estimated ratings and additional details.
     """
 
+    if data.empty:
+        return pd.DataFrame(columns=["prod_id", "estimated_ratings", "details"])
+
+    if not {"user_id", "prod_id", "rating"}.issubset(data.columns):
+        raise ValueError("data must contain 'user_id', 'prod_id', and 'rating' columns.")
+
+    # Build candidate products without materializing a dense user-item matrix.
+    user_mask = data["user_id"].astype(str) == str(user_id)
+    interacted_products = set(data.loc[user_mask, "prod_id"].astype(str))
+    all_products = pd.unique(data["prod_id"].astype(str))
+    non_interacted_products = [item_id for item_id in all_products if item_id not in interacted_products]
+
     # Initialize list to store recommendations
     recommendations = []
-
-    # Create an user item interactions matrix
-    user_item_interactions_matrix = data.pivot_table(
-        index="user_id", columns="prod_id", values="rating", aggfunc="mean"
-    )
-
-    # Extracte those product ids which the user_id has not interacted yet
-    non_interacted_products = user_item_interactions_matrix.loc[user_id][
-        user_item_interactions_matrix.loc[user_id].isnull()
-    ].index.tolist()
 
     # Loop through each of the product ids which user_id has not interacted yet
     for item_id in non_interacted_products:
