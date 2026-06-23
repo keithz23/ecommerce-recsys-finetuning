@@ -89,3 +89,6 @@ target/
 # Mypy cache
 .mypy_cache/
 data/input
+# Dataset
+data/model_input/
+*.csv
