@@ -2,6 +2,126 @@
 
 Tai lieu nay dung de viet phan bao cao/slide cho model SVD trong du an recommendation system. Noi dung tap trung vao: kien truc pipeline, nguyen ly hoat dong, rang buoc bai toan, input/output, ly do ket hop voi Collaborative Filtering va cach trinh bay ket qua that.
 
+## 0. Phan thuyet trinh can nam: Pipeline, User CF, SVD, Macro-Architecture
+
+Theo file slide/PDF, phan can trinh bay co 3 cum chinh:
+
+```text
+1. The Transparent Pipeline - Data Transformation
+2. Cac Models khao sat - tap trung vao User-User CF va SVD
+3. System Macro-Architecture & Tech Stack
+```
+
+Neu bi hoi "phan cua em lam gi?", co the tra loi ngan:
+
+```text
+Em phu trach giai thich duong di cua du lieu tu raw Amazon reviews den model-ready data, sau do trinh bay hai model chinh trong nhanh Collaborative Filtering la User-User CF va SVD. Cuoi cung em noi cach cac component ghep thanh he thong: data pipeline, model training, evaluation, recommendation engine va UI demo.
+```
+
+### 0.1. The Transparent Pipeline - Data Transformation
+
+Pipeline du lieu nen duoc giai thich theo logic sau:
+
+```text
+Raw Amazon JSONL reviews + metadata
+-> build_master_dataset.py
+-> 01_build_interaction.py
+-> 02_build_products.py
+-> 04_split_train_test.py
+-> 05_build_popularity_train.py
+-> filter_model_inputs.py
+-> data/model_input/{cf, svd, content_based, popularity}/
+```
+
+Y nghia tung buoc:
+
+| Buoc | Script / Xu ly | Tai sao can lam |
+| ---- | -------------- | --------------- |
+| 0 | `build_master_dataset.py` scan raw review + metadata, giu data gan nhat, merge review voi product metadata, xu ly `Price` thieu bang median | Tao mot bang tong hop day du ca interaction va thong tin san pham; tranh moi model phai doc raw JSONL lon nhieu lan |
+| 1 | `01_build_interaction.py` dedup theo `(UserId, ProductId, Timestamp)`, chuan hoa `VerifiedPurchase` | Mot user co the co duplicate review; dedup giup rating khong bi dem lap va popularity khong bi thoi phong |
+| 2 | `02_build_products.py` tao `CombinedText = Title + Category + Description + Features + Store` | Content-Based/TF-IDF can mot cot text tong hop de tinh cosine similarity giua san pham |
+| 3 | `04_split_train_test.py` temporal split, tao `IsRelevant = Rating >= 4`, bo gap rows neu co | Split theo thoi gian giong thuc te: train tren qua khu, test tren tuong lai; `IsRelevant` dung cho HitRate/MAP/MRR |
+| 4 | `05_build_popularity_train.py` build popularity chi tu train data | Tranh data leakage: khong duoc dung test de tinh item nao pho bien |
+| 5 | `filter_model_inputs.py` tao profile rieng cho CF/SVD/Popularity/Content-Based | Moi model co gioi han RAM khac nhau; CF can tap nho hon vi similarity matrix tang theo O(n^2), SVD chiu duoc lon hon |
+
+Ly do lam pipeline theo nhieu buoc:
+
+- De minh bach: moi buoc co input/output ro, hoi den dau giai thich den do.
+- De tranh leakage: test set chi dung de evaluate, khong dung tinh popularity, Bayesian average, TF-IDF profile hay train model.
+- De tranh crash RAM: User-User CF/Item-Item CF can tinh similarity matrix, nen phai loc user/item; SVD dung latent factors nen chay duoc tren tap lon hon.
+- De dung voi bai toan thuc te: he thong recommendation khong duoc hoc tu du lieu tuong lai.
+
+### 0.2. Cac models khao sat - phan can nhan manh User-User CF va SVD
+
+Trong slide co the nhac nhieu model de dat boi canh nhu Popularity, Content-Based, User-User CF, Item-Item CF va SVD. Tuy nhien neu phan cua ban la User CF va SVD thi nen noi ro:
+
+```text
+Em tap trung vao hai model Collaborative Filtering:
+- User-User CF: memory-based collaborative filtering.
+- SVD: model-based collaborative filtering / matrix factorization.
+```
+
+Bang so sanh ngan cho phan cua ban:
+
+| Model | Nguyen ly | Vi sao khao sat | Han che |
+| ----- | --------- | --------------- | ------- |
+| User-User CF | Tao vector rating cho moi user, tinh cosine similarity giua user, lay Top-K user giong nhat va aggregate rating cua ho | Day la baseline Collaborative Filtering de giai thich truc quan: "nguoi dung giong ban cung thich san pham nay" | Cold-start user kem, du lieu sparse lam similarity kem on dinh, memory/time tang nhanh khi so user lon |
+| SVD | Factorize user-item matrix thanh latent factors cua user va item, du doan `r_hat(u,i) = mu + b_u + b_i + q_i^T p_u` | Day la model chinh vi xu ly sparse matrix tot hon KNN CF va cho RMSE tot hon trong thuc nghiem | Kho giai thich truc quan hon, van can lich su rating, khong tu xu ly duoc user/item moi |
+
+Tai sao can lam ca User-User CF va SVD:
+
+- User-User CF la baseline de chung minh cach Collaborative Filtering co ban hoat dong.
+- SVD la ban nang cao cua Collaborative Filtering, khong tinh similarity truc tiep tren toan bo ma tran ma hoc latent factors.
+- Neu SVD tot hon User-User CF ve RMSE/HitRate/MRR thi co co so noi rang factorization phu hop hon voi du lieu sparse.
+- Khi bi hoi "SVD co phai CF khong?", tra loi: co, SVD la model-based Collaborative Filtering vi no hoc tu rating user-item, khong dung noi dung san pham.
+
+### 0.3. System Macro-Architecture & Tech Stack
+
+Macro-architecture dung voi repo hien tai nen trinh bay theo cac layer:
+
+```text
+Data Source
+-> Data Preparation / Filtering
+-> Model Input Store
+-> Model Training & Evaluation
+-> Model Artifact / Metrics
+-> Recommendation Engine
+-> Local UI Demo
+```
+
+Ghep voi file/code that trong repo:
+
+| Layer | File / Thanh phan trong repo | Vai tro |
+| ----- | ---------------------------- | ------- |
+| Data Source | `data/input/interaction_train.csv`, `data/input/interaction_test.csv`, `data/input/products.csv` | Du lieu interaction da split train/test va product catalog |
+| Data Preparation / Filtering | `scripts/filter_model_inputs.py` | Tao cac tap nho rieng cho `cf`, `svd`, `content_based`, `popularity` de tranh tran RAM |
+| Model Input Store | `data/model_input/...` | Luu train/test da loc theo tung model profile |
+| Model Training & Evaluation | `notebooks/combined_recommendation_system.ipynb`, `src/cf_recommender.py`, `src/rank_recommender.py`, `src/content_based_recommendation.py`, `src/hybrid_recommender.py`, `src/model_eval_functions.py` | Train/evaluate Rank-Based, User-User CF, Item-Item CF, SVD, Content-Based va Hybrid |
+| Model Artifact / Metrics | `models/final_model_svd.pkl`, `reports/model_metrics/all_model_metrics.csv` neu da export | Luu model da train va bang metric de demo/bao cao |
+| Recommendation Engine | `demo_app.py` + cac ham trong `src/*` | Sinh Top-N recommendation cho user theo Content-Based, Rank-Based, SVD hoac Hybrid |
+| Local UI Demo | `demo_app.py` | Web demo local o `localhost:8000`, chon user/model/top-N va hien thi ket qua |
+
+Bang tech stack dung de giai thich khi thuyet trinh:
+
+| Layer | Cong cu | Vi sao dung |
+| ----- | ------- | ----------- |
+| Data Preparation | Python, Pandas, chunking/filtering | Python/Pandas de xu ly CSV linh hoat; filtering theo profile giup moi model chay duoc trong gioi han RAM |
+| Popularity | Pandas custom scoring | Popularity la aggregation theo product nen Pandas du nhanh, de debug va de giai thich |
+| Content-Based | Scikit-learn `TfidfVectorizer`, `cosine_similarity` | TF-IDF phu hop voi text metadata nhu title/category/description; cosine similarity de tim san pham noi dung tuong tu |
+| User-User CF | Surprise `KNNBasic` / cosine similarity | Surprise co san API cho rating-based CF, de train/evaluate voi RMSE va Top-N |
+| SVD | Surprise `SVD` | Surprise SVD co cong thuc bias + latent factors, phu hop bai toan explicit rating 1-5 |
+| Evaluation | Custom Python metrics | Can tinh ca rating metrics (`RMSE`, `MAE`) va ranking metrics (`HitRate@K`, `MAP@K`, `MRR@K`) |
+| UI Demo | `demo_app.py` local web UI, hoac notebook demo | De nhap `UserId` va show Top-N output that, khong chi noi metric |
+
+Ly do kien truc nay hop ly:
+
+- Tach pipeline voi model: data xu ly mot lan, nhieu model dung lai duoc.
+- Tach train voi evaluate: dam bao metric cong bang va tranh leakage.
+- Tach recommendation engine voi UI: UI chi goi ham recommend, khong chua logic train phuc tap.
+- Dung model phu hop tung tinh huong: Popularity cho user moi, Content-Based cho item moi co metadata, User CF/SVD cho personalized recommendation.
+
+Luu y khi doi chieu voi slide PDF: slide co nhac `SQLite/WAL mode` va cac script ETL nhu `build_master_dataset.py`, `01_build_interaction.py`, `02_build_products.py`, `04_split_train_test.py`, `05_build_popularity_train.py`. Cac thanh phan do hop ly o muc pipeline tong quat/upstream, nhung trong repo hien tai khong thay cac file script do. Khi thuyet trinh theo repo nay, nen noi phan implemented ro nhat la `data/input`, `scripts/filter_model_inputs.py`, `notebooks/combined_recommendation_system.ipynb`, `src/*`, `models/final_model_svd.pkl` va `demo_app.py`.
+
 ## 1. Kien truc tong the he thong
 
 Pipeline tong the cua du an:
@@ -129,6 +249,15 @@ Notebook   : train, evaluate, demo output that neu chua co UI
 ## 1.2. Khao sat toi thieu 03 mo hinh/thuat toan lien quan
 
 Phan nay dung de dap ung yeu cau khao sat it nhat 03 model/thuat toan lien quan. Trong bai toan recommendation system, co the trinh bay 04 nhom model chinh: Popularity, Collaborative Filtering KNN, SVD va Content-Based. Trong do SVD la model trong tam cua phan hien thuc.
+
+Luu y cho phan thuyet trinh cua ban: neu nhom da chia phan "model survey" va ban chi phu trach User CF + SVD, thi chi can noi ngan Popularity/Content-Based de dat boi canh. Phan can giai thich sau la User-User CF va SVD:
+
+```text
+User-User CF = memory-based CF baseline
+SVD          = model-based CF / matrix factorization, model chinh
+```
+
+Item-Item CF co the nhac nhu bien the CF khac neu slide co bang so sanh, nhung khong can di sau neu khong thuoc phan cua ban.
 
 ### 1. Popularity / Rank-Based Recommendation
 
@@ -618,6 +747,79 @@ Nguyen tac la:
 6. Gioi han RAM
 
    User-User CF va Item-Item CF can ma tran similarity, rat ton RAM. SVD nhe hon KNN CF, nhung grid search tren data lon van rat nang. Vi vay can dung filtered dataset.
+
+7. Data leakage
+
+   Cac thong ke dung de train/rank nhu `PopularityScore`, `BayesianAvg`, `RatingCount`, `AvgRating`, `global_mean` va cac latent factors cua SVD chi duoc tinh tu tap train. Tap test chi dung de danh gia sau khi model da hoc xong. Neu tinh popularity hoac average rating tren ca train + test thi model da nhin thay thong tin tu tuong lai, lam metric dep gia va khong con cong bang.
+
+   Trong pipeline, can tach ro:
+
+   ```text
+   interaction_train.csv -> train model / tinh thong ke ranking
+   interaction_test.csv  -> evaluate only
+   ```
+
+   Vi vay file `popularity_train_dataset.csv` phai duoc build tu `data/model_input/popularity/interaction_train.csv`, khong build tu test hoac full data da tron train-test.
+
+8. Rating bias
+
+   Dataset review thuong bi thien ve diem cao, dac biet rating 4-5. Dieu nay lam model de hoc xu huong cho diem cao va de uu tien cac san pham da pho bien/co nhieu rating tot. He qua la cac metric ranking nhu Precision@K, MAP, MRR, HitRate@K co the cao hon cam nhan thuc te vi model chi can day cac item pho bien len top.
+
+   Cach xu ly/giai thich trong du an:
+
+   - SVD co `global_mean`, `user_bias`, `item_bias` de dieu chinh xu huong user cho diem cao/thap va item duoc cham diem cao/thap.
+   - Popularity dung Bayesian average de tranh truong hop san pham moi co it rating 5 sao nhung bi day len top qua nhanh.
+   - Khi bao cao metric can noi ro ket qua bi anh huong boi sparsity va positive rating bias, khong nen chi dua vao mot metric.
+
+9. Popularity signal chi la proxy
+
+   Dataset chinh cua du an la review/rating, khong phai log e-commerce day du nhu click, view, add-to-cart, purchase. Vi vay cac tin hieu trong Popularity model duoc hieu la proxy:
+
+   ```text
+   ViewCount     = 1 cho moi review/interaction
+   CartCount     = 1 neu Rating >= 4
+   PurchaseCount = 1 neu Rating == 5 hoac VerifiedPurchase == 1
+   ```
+
+   Cong thuc minh hoa:
+
+   ```text
+   PopularityScore = 1.0 * ViewCount + 3.0 * CartCount + 5.0 * PurchaseCount
+   ```
+
+   Trong slide co the trinh bay cong thuc tren, nhung khi bi hoi can noi ro: day khong phai log hanh vi that nhu view/cart/purchase tren website. Day la tin hieu gia lap tu review dataset:
+
+   - `View` nghia la product co mot interaction/review.
+   - `Cart` duoc proxy bang rating cao (`Rating >= 4`) vi rating cao the hien user co y dinh/tin hieu tich cuc.
+   - `Purchase` duoc proxy bang rating cuc cao (`Rating == 5`) hoac cot `VerifiedPurchase`.
+
+   Luu y implementation: neu dung truc tiep `scripts/filter_model_inputs.py` hien tai, can kiem tra lai vi script dang build `CartCount = 0` va `PurchaseCount = VerifiedPurchase`. Neu slide su dung cong thuc `Cart = Rating >= 4`, `Purchase = Rating == 5 hoac VerifiedPurchase == 1` thi code build popularity can dong bo theo cong thuc nay truoc khi lay metric chinh thuc.
+
+10. Metadata constraint cho Content-Based
+
+   Content-Based chi xu ly cold-start item tot khi product moi co metadata nhu title, category, brand, description hoac feature text. Neu product moi chi co `ProductId` ma khong co thong tin noi dung, Content-Based cung khong co du tin hieu de tinh similarity. Khi do he thong chi co the fallback ve Popularity hoac cho den khi item co tuong tac dau tien.
+
+### 9.1. Cau tra loi nhanh khi bi hoi xoay
+
+1. Vi sao SVD khong xu ly duoc user moi?
+
+   SVD hoc vector an cho user tu lich su rating. User moi chua co rating thi khong co vector user on dinh, nen du doan ca nhan hoa khong dang tin. Vi vay fallback sang Popularity.
+
+2. Vi sao product moi fallback sang Content-Based?
+
+   Product moi chua co rating thi SVD/CF khong hoc duoc vector item. Neu product co metadata, Content-Based van co the so sanh title/category/description voi cac item user da thich.
+
+3. Vi sao khong dung full dataset?
+
+   Full train co hang chuc trieu dong. KNN CF can similarity matrix rat lon, SVD/GridSearch cung ton RAM va thoi gian. Vi vay pipeline loc du lieu theo tung model de chay duoc tren Colab/Kaggle ma van giu dung logic train/evaluate.
+
+4. Vi sao metric co the bi ao?
+
+   Du lieu sparse va rating bi thien ve 4-5 sao. Neu nhieu user cung rating cac san pham pho bien, model de day item pho bien len top va dat ranking metric cao. Vi vay can giai thich kem sparsity, rating bias va baseline comparison.
+
+5. Lam sao tranh data leakage?
+
+   Tat ca feature/thong ke ranking va model parameter chi hoc tu train. Test set chi dung sau cung de tinh RMSE, MAE, Precision@K, Recall@K... Khong dung test de tinh popularity, Bayesian average hay chon item top.
 
 ## 10. Cach trinh bay output that
 
