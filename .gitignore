@@ -88,4 +88,12 @@ target/
 
 # Mypy cache
 .mypy_cache/
+<<<<<<< HEAD
 data/input
+=======
+data/input
+# Dataset
+
+data/model_input/
+*.csv
+>>>>>>> 800df70b1e11e6928524fd2e5c59c773573e2bb7
