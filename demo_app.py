@@ -26,11 +26,19 @@ from src.content_based_recommendation import content_based_filtering
 HOST = "127.0.0.1"
 PORT = 8000
 PROJECT_ROOT = Path(__file__).resolve().parent
-PROCESSED_DATA_PATH = PROJECT_ROOT / "data" / "processed" / "processed_data.pkl"
-PRODUCT_METADATA_PATH = PROJECT_ROOT / "data" / "processed" / "product_metadata.csv"
+DATA_INPUT_DIR = PROJECT_ROOT / "data" / "input"
+MODEL_INPUT_DIR = PROJECT_ROOT / "data" / "model_input"
+INTERACTION_TRAIN_PATHS = [
+    DATA_INPUT_DIR / "interaction_train.csv",
+    MODEL_INPUT_DIR / "svd" / "interaction_train.csv",
+    MODEL_INPUT_DIR / "cf" / "interaction_train.csv",
+]
+PRODUCT_METADATA_PATHS = [
+    DATA_INPUT_DIR / "products.csv",
+    MODEL_INPUT_DIR / "content_based" / "products.csv",
+]
 FINAL_SVD_MODEL_PATH = PROJECT_ROOT / "models" / "final_model_svd.pkl"
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
-RAW_SAMPLE_ROWS_PER_FILE = 50_000
+MODEL_METRICS_PATH = PROJECT_ROOT / "reports" / "model_metrics" / "all_model_metrics.csv"
 RELEVANCE_THRESHOLD = 4.5
 
 logger = logging.getLogger(__name__)
@@ -180,7 +188,8 @@ HTML = r"""<!doctype html>
     button:hover { background: var(--accent-dark); }
     button:disabled { opacity: 0.6; cursor: wait; }
 
-    .summary {
+    .summary,
+    .metrics-summary {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
@@ -209,6 +218,10 @@ HTML = r"""<!doctype html>
 
     .results {
       overflow: hidden;
+    }
+
+    .metrics {
+      margin-bottom: 20px;
     }
 
     .results-head {
@@ -300,7 +313,8 @@ HTML = r"""<!doctype html>
     @media (max-width: 820px) {
       .layout { grid-template-columns: 1fr; }
       .controls { position: static; }
-      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary,
+      .metrics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .topbar { align-items: flex-start; flex-direction: column; padding: 14px 0; }
       .status { white-space: normal; }
       table { min-width: 720px; }
@@ -318,6 +332,39 @@ HTML = r"""<!doctype html>
 
   <main class="wrap">
     <section class="summary" id="summary"></section>
+    <section class="metrics">
+      <div class="results-head" style="padding-left: 0; padding-right: 0;">
+        <h2>Model Metrics</h2>
+        <div class="method-note" id="metricsNote"></div>
+      </div>
+      <section class="panel results">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>K</th>
+                <th>Evaluated Users</th>
+                <th>Precision@K</th>
+                <th>Recall@K</th>
+                <th>F1@K</th>
+                <th>HitRate@K</th>
+                <th>MAP@K</th>
+                <th>MRR@K</th>
+                <th>NDCG@K</th>
+                <th>Catalog Coverage</th>
+                <th>RMSE</th>
+                <th>MAE</th>
+                <th>Rating Eval Rows</th>
+              </tr>
+            </thead>
+            <tbody id="metricsBody">
+              <tr><td colspan="14" class="empty">Loading metrics...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
 
     <section class="layout">
       <aside class="panel controls">
@@ -369,7 +416,7 @@ HTML = r"""<!doctype html>
   </main>
 
   <script>
-    const state = { users: [], summary: null };
+    const state = { users: [], summary: null, metrics: [] };
 
     const fmt = new Intl.NumberFormat("en-US");
 
@@ -405,6 +452,49 @@ HTML = r"""<!doctype html>
       ].join("");
       document.getElementById("metadataStatus").textContent = summary.metadata_source;
       document.getElementById("warning").textContent = summary.warning;
+    }
+
+    function formatMetricValue(value) {
+      if (value === null || value === undefined || value === "") {
+        return "N/A";
+      }
+      const numeric = Number(value);
+      if (!Number.isNaN(numeric)) {
+        if (Math.abs(numeric) < 1 && numeric !== 0) {
+          return numeric.toFixed(3);
+        }
+        return numeric.toFixed(Number.isInteger(numeric) ? 0 : 3);
+      }
+      return String(value);
+    }
+
+    function renderMetrics(metrics) {
+      const body = document.getElementById("metricsBody");
+      if (!metrics.length) {
+        body.innerHTML = `<tr><td colspan="14" class="empty">No model metrics found.</td></tr>`;
+        document.getElementById("metricsNote").textContent = "Missing reports/model_metrics/all_model_metrics.csv";
+        return;
+      }
+
+      document.getElementById("metricsNote").textContent = `${metrics.length} rows from all_model_metrics.csv`;
+      body.innerHTML = metrics.map((row) => `
+        <tr>
+          <td><strong>${row.Model ?? row.model ?? "N/A"}</strong></td>
+          <td>${formatMetricValue(row.K ?? row.k)}</td>
+          <td>${formatMetricValue(row.EvaluatedUsers ?? row.evaluated_users)}</td>
+          <td>${formatMetricValue(row["Precision@K"] ?? row.precision_at_k)}</td>
+          <td>${formatMetricValue(row["Recall@K"] ?? row.recall_at_k)}</td>
+          <td>${formatMetricValue(row["F1@K"] ?? row.f1_at_k)}</td>
+          <td>${formatMetricValue(row["HitRate@K"] ?? row.hit_rate_at_k)}</td>
+          <td>${formatMetricValue(row["MAP@K"] ?? row.map_at_k)}</td>
+          <td>${formatMetricValue(row["MRR@K"] ?? row.mrr_at_k)}</td>
+          <td>${formatMetricValue(row["NDCG@K"] ?? row.ndcg_at_k)}</td>
+          <td>${formatMetricValue(row["CatalogCoverage@K"] ?? row["CatalogCoverage"] ?? row.catalog_coverage_at_k)}</td>
+          <td>${formatMetricValue(row.RMSE ?? row.rmse)}</td>
+          <td>${formatMetricValue(row.MAE ?? row.mae)}</td>
+          <td>${formatMetricValue(row.RatingEvalRows ?? row.rating_eval_rows)}</td>
+        </tr>
+      `).join("");
     }
 
     function renderUsers(users) {
@@ -459,13 +549,16 @@ HTML = r"""<!doctype html>
     }
 
     async function loadInitialData() {
-      const [summary, users] = await Promise.all([
+      const [summary, users, metrics] = await Promise.all([
         api("/api/summary"),
         api("/api/users?limit=100"),
+        api("/api/metrics"),
       ]);
       state.summary = summary;
       state.users = users.users;
+      state.metrics = metrics.metrics;
       renderSummary(summary);
+      renderMetrics(state.metrics);
       renderUsers(state.users);
     }
 
@@ -505,6 +598,8 @@ HTML = r"""<!doctype html>
       .catch((error) => {
         document.getElementById("metadataStatus").textContent = "Dataset failed to load";
         document.getElementById("warning").textContent = error.message;
+        document.getElementById("metricsBody").innerHTML =
+          `<tr><td colspan="14" class="empty">Metrics unavailable.</td></tr>`;
       });
   </script>
 </body>
@@ -525,33 +620,34 @@ class RecommendationData:
         ].copy()
 
     def _load_ratings_data(self) -> tuple[pd.DataFrame, str]:
-        if PROCESSED_DATA_PATH.exists():
-            try:
-                df = pd.read_pickle(PROCESSED_DATA_PATH)
-                return df[["user_id", "prod_id", "rating"]].copy(), "processed data"
-            except Exception as exc:
-                logger.warning("Could not read processed_data.pkl: %s", exc)
-
-        csv_files = sorted(RAW_DATA_DIR.glob("amazon_product_ratings_part_*.csv"))
-        if not csv_files:
+        source_path = next((path for path in INTERACTION_TRAIN_PATHS if path.exists()), None)
+        if source_path is None:
             raise FileNotFoundError(
-                "Could not load ratings data. Expected processed_data.pkl or raw CSV files."
+                "Could not load ratings data. Expected data/input/interaction_train.csv "
+                "or a filtered interaction_train.csv under data/model_input/."
             )
 
-        frames = [
-            pd.read_csv(
-                csv_file,
-                header=None,
-                names=["user_id", "prod_id", "rating", "timestamp"],
-                usecols=[0, 1, 2],
-                nrows=RAW_SAMPLE_ROWS_PER_FILE,
-            )
-            for csv_file in csv_files
-        ]
-        df = pd.concat(frames, ignore_index=True)
+        df = pd.read_csv(source_path)
+        rename_map = {
+            "UserId": "user_id",
+            "ProductId": "prod_id",
+            "Rating": "rating",
+            "userId": "user_id",
+            "productId": "prod_id",
+            "rating": "rating",
+        }
+        df = df.rename(columns=rename_map)
+        required_cols = {"user_id", "prod_id", "rating"}
+        missing = required_cols - set(df.columns)
+        if missing:
+            raise ValueError(f"{source_path} is missing required columns: {sorted(missing)}")
+
+        df = df[["user_id", "prod_id", "rating"]].copy()
         df = df.dropna(subset=["user_id", "prod_id", "rating"])
         df["rating"] = pd.to_numeric(df["rating"], errors="coerce")
         df = df.dropna(subset=["rating"])
+        df["user_id"] = df["user_id"].astype(str)
+        df["prod_id"] = df["prod_id"].astype(str)
 
         active_users = df["user_id"].value_counts()
         active_products = df["prod_id"].value_counts()
@@ -560,7 +656,7 @@ class RecommendationData:
             & df["prod_id"].isin(active_products[active_products >= 3].index)
         ].copy()
 
-        return df[["user_id", "prod_id", "rating"]], "raw sample data"
+        return df[["user_id", "prod_id", "rating"]], f"dataset from {source_path.relative_to(PROJECT_ROOT)}"
 
     def _load_svd_model(self):
         if not FINAL_SVD_MODEL_PATH.exists():
@@ -575,9 +671,50 @@ class RecommendationData:
             return None, f"SVD model unavailable: {exc}"
 
     def _load_product_metadata(self) -> tuple[pd.DataFrame, str]:
-        if PRODUCT_METADATA_PATH.exists():
-            metadata = pd.read_csv(PRODUCT_METADATA_PATH)
-            return metadata, "Using product metadata"
+        source_path = next((path for path in PRODUCT_METADATA_PATHS if path.exists()), None)
+        if source_path is not None:
+            raw = pd.read_csv(source_path)
+
+            def first_existing(*names: str) -> pd.Series | None:
+                for name in names:
+                    if name in raw.columns:
+                        return raw[name]
+                return None
+
+            prod_series = first_existing("prod_id", "ProductId", "product_id", "prodId")
+            if prod_series is None:
+                raise ValueError(
+                    f"{source_path} must contain a product id column such as ProductId or prod_id."
+                )
+
+            product_name_series = first_existing("product_name", "Title", "title")
+            category_series = first_existing("category", "MainCategory", "main_category", "Categories")
+            brand_series = first_existing("brand", "Brand")
+
+            metadata = pd.DataFrame(
+                {
+                    "prod_id": prod_series.astype(str),
+                    "product_name": (
+                        product_name_series.astype(str)
+                        if product_name_series is not None
+                        else pd.Series([None] * len(raw))
+                    ),
+                    "category": (
+                        category_series.astype(str)
+                        if category_series is not None
+                        else pd.Series([None] * len(raw))
+                    ),
+                    "brand": (
+                        brand_series.astype(str)
+                        if brand_series is not None
+                        else pd.Series([None] * len(raw))
+                    ),
+                }
+            )
+            metadata["product_name"] = metadata["product_name"].replace("None", None)
+            metadata["category"] = metadata["category"].replace("None", None)
+            metadata["brand"] = metadata["brand"].replace("None", None)
+            return metadata, f"Using product metadata from {source_path.relative_to(PROJECT_ROOT)}"
 
         metadata = (
             self.df.groupby("prod_id")
@@ -610,13 +747,25 @@ class RecommendationData:
             "metadata_source": f"{self.metadata_source}, {self.data_source}",
             "warning": (
                 "Fallback metadata is enough for a runnable demo. Add "
-                "data/processed/product_metadata.csv with category, brand, title, "
-                "and description for a stronger content-based demo."
-                if not PRODUCT_METADATA_PATH.exists()
+                "data/input/products.csv or data/model_input/content_based/products.csv "
+                "with category, brand, title, and description for a stronger content-based demo."
+                if not any(path.exists() for path in PRODUCT_METADATA_PATHS)
                 else "Product metadata file detected."
             ),
             "cf_status": self.svd_status,
         }
+
+    def metrics(self) -> list[dict]:
+        if not MODEL_METRICS_PATH.exists():
+            return []
+
+        try:
+            metrics_df = pd.read_csv(MODEL_METRICS_PATH)
+        except Exception as exc:
+            logger.warning("Could not read model metrics: %s", exc)
+            return []
+
+        return dataframe_to_records(metrics_df)
 
     def users(self, limit: int = 100) -> list[dict]:
         counts = self.df["user_id"].value_counts().head(limit)
@@ -713,21 +862,20 @@ DATA = RecommendationData()
 def dataframe_to_records(df: pd.DataFrame) -> list[dict]:
     safe = df.replace({pd.NA: None}).where(pd.notna(df), None)
     records = safe.to_dict(orient="records")
-    return [
-        {
-            key: (
-                round(float(value), 4)
-                if isinstance(value, float)
-                else int(value)
-                if hasattr(value, "item") and isinstance(value.item(), int)
-                else value.item()
-                if hasattr(value, "item")
-                else value
-            )
-            for key, value in record.items()
-        }
-        for record in records
-    ]
+
+    def normalize(value):
+        if value is None:
+            return None
+        if pd.isna(value):
+            return None
+        if isinstance(value, float):
+            return round(value, 4)
+        if hasattr(value, "item"):
+            item = value.item()
+            return normalize(item)
+        return value
+
+    return [{key: normalize(value) for key, value in record.items()} for record in records]
 
 
 class DemoHandler(BaseHTTPRequestHandler):
@@ -745,6 +893,10 @@ class DemoHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             limit = int(query.get("limit", ["100"])[0])
             self._send_json({"users": DATA.users(limit=limit)})
+            return
+
+        if parsed.path == "/api/metrics":
+            self._send_json({"metrics": DATA.metrics()})
             return
 
         self.send_error(404, "Not found")
@@ -808,7 +960,24 @@ class DemoHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        def sanitize(value):
+            if value is None:
+                return None
+            if isinstance(value, dict):
+                return {key: sanitize(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            if isinstance(value, tuple):
+                return [sanitize(item) for item in value]
+            if isinstance(value, float) and pd.isna(value):
+                return None
+            if pd.isna(value):
+                return None
+            if hasattr(value, "item"):
+                return sanitize(value.item())
+            return value
+
+        body = json.dumps(sanitize(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
