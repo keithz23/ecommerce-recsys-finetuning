@@ -25,21 +25,22 @@ from src.content_based_recommendation import content_based_filtering
 
 HOST = "127.0.0.1"
 PORT = 8000
+FALLBACK_PORTS = [8001, 8002, 8003]
+APP_VERSION = "fast-demo-v2"
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_INPUT_DIR = PROJECT_ROOT / "data" / "input"
 MODEL_INPUT_DIR = PROJECT_ROOT / "data" / "model_input"
 INTERACTION_TRAIN_PATHS = [
-    DATA_INPUT_DIR / "interaction_train.csv",
     MODEL_INPUT_DIR / "svd" / "interaction_train.csv",
+    MODEL_INPUT_DIR / "popularity" / "interaction_train.csv",
     MODEL_INPUT_DIR / "cf" / "interaction_train.csv",
 ]
 PRODUCT_METADATA_PATHS = [
-    DATA_INPUT_DIR / "products.csv",
     MODEL_INPUT_DIR / "content_based" / "products.csv",
 ]
 FINAL_SVD_MODEL_PATH = PROJECT_ROOT / "models" / "final_model_svd.pkl"
 MODEL_METRICS_PATH = PROJECT_ROOT / "reports" / "model_metrics" / "all_model_metrics.csv"
 RELEVANCE_THRESHOLD = 4.5
+DEMO_CANDIDATE_LIMIT = 500
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,7 @@ HTML = r"""<!doctype html>
   <header>
     <div class="wrap topbar">
       <h1>Amazon Product Recommendation Demo</h1>
-      <div class="status"><span class="dot"></span><span id="metadataStatus">Loading dataset</span></div>
+      <div class="status"><span class="dot"></span><span id="metadataStatus">Loading dataset</span> · fast-demo-v2</div>
     </div>
   </header>
 
@@ -375,10 +376,10 @@ HTML = r"""<!doctype html>
         <div class="field">
           <label for="methodSelect">Method</label>
           <select id="methodSelect">
-            <option value="content">Content-Based</option>
-            <option value="rank">Rank-Based</option>
+            <option value="rank" selected>Rank-Based</option>
             <option value="svd">SVD Collaborative Filtering</option>
             <option value="hybrid">Hybrid SVD + Rank</option>
+            <option value="content">Content-Based</option>
           </select>
         </div>
         <div class="field">
@@ -398,16 +399,17 @@ HTML = r"""<!doctype html>
           <table>
             <thead>
               <tr>
-                <th data-col="rank">#</th>
+                <th data-col="user">User ID</th>
+                <th data-col="rank">Rank</th>
                 <th data-col="product">Product</th>
                 <th data-col="category">Category</th>
                 <th data-col="rating">Rating</th>
                 <th data-col="count">Count</th>
-                <th data-col="score">Score</th>
+                <th data-col="score">Predicted Score</th>
               </tr>
             </thead>
             <tbody id="resultsBody">
-              <tr><td colspan="6" class="empty">Choose a user and generate recommendations.</td></tr>
+              <tr><td colspan="7" class="empty">Choose a user and generate recommendations.</td></tr>
             </tbody>
           </table>
         </div>
@@ -511,12 +513,13 @@ HTML = r"""<!doctype html>
 
       const body = document.getElementById("resultsBody");
       if (!payload.recommendations.length) {
-        body.innerHTML = `<tr><td colspan="6" class="empty">No recommendations found for this user.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="7" class="empty">No recommendations found for this user.</td></tr>`;
         return;
       }
 
       body.innerHTML = payload.recommendations.map((item, index) => `
         <tr>
+          <td data-col="user">${payload.user_id}</td>
           <td data-col="rank">${index + 1}</td>
           <td data-col="product">
             <strong>${item.product_name || item.prod_id}</strong>
@@ -556,11 +559,13 @@ HTML = r"""<!doctype html>
       ]);
       state.summary = summary;
       state.users = users.users;
-      state.metrics = metrics.metrics;
-      renderSummary(summary);
-      renderMetrics(state.metrics);
-      renderUsers(state.users);
-    }
+        state.metrics = metrics.metrics;
+        renderSummary(summary);
+        renderMetrics(state.metrics);
+        renderUsers(state.users);
+        document.getElementById("resultTitle").textContent = "Recommendations";
+        document.getElementById("methodNote").textContent = "Choose a user, then click Generate.";
+      }
 
     async function generateRecommendations() {
       const button = document.getElementById("recommendButton");
@@ -578,7 +583,7 @@ HTML = r"""<!doctype html>
         renderRecommendations(payload);
       } catch (error) {
         document.getElementById("resultsBody").innerHTML =
-          `<tr><td colspan="6" class="empty">${error.message}</td></tr>`;
+          `<tr><td colspan="7" class="empty">${error.message}</td></tr>`;
       } finally {
         button.disabled = false;
         button.textContent = "Generate Recommendations";
@@ -592,8 +597,8 @@ HTML = r"""<!doctype html>
 
     loadInitialData()
       .then(() => {
+        document.getElementById("methodSelect").value = "rank";
         highlightImportantColumns(document.getElementById("methodSelect").value);
-        return generateRecommendations();
       })
       .catch((error) => {
         document.getElementById("metadataStatus").textContent = "Dataset failed to load";
@@ -623,8 +628,8 @@ class RecommendationData:
         source_path = next((path for path in INTERACTION_TRAIN_PATHS if path.exists()), None)
         if source_path is None:
             raise FileNotFoundError(
-                "Could not load ratings data. Expected data/input/interaction_train.csv "
-                "or a filtered interaction_train.csv under data/model_input/."
+                "Could not load ratings data. Expected a filtered interaction_train.csv "
+                "under data/model_input/."
             )
 
         df = pd.read_csv(source_path)
@@ -714,8 +719,18 @@ class RecommendationData:
             metadata["product_name"] = metadata["product_name"].replace("None", None)
             metadata["category"] = metadata["category"].replace("None", None)
             metadata["brand"] = metadata["brand"].replace("None", None)
+            metadata = metadata.drop_duplicates("prod_id")
+
+            demo_product_ids = set(self.df["prod_id"])
+            metadata = metadata[metadata["prod_id"].isin(demo_product_ids)].copy()
+            if metadata.empty:
+                return self._fallback_metadata(), "Using fallback metadata"
+
             return metadata, f"Using product metadata from {source_path.relative_to(PROJECT_ROOT)}"
 
+        return self._fallback_metadata(), "Using fallback metadata"
+
+    def _fallback_metadata(self) -> pd.DataFrame:
         metadata = (
             self.df.groupby("prod_id")
             .agg(avg_rating=("rating", "mean"), rating_count=("rating", "count"))
@@ -723,7 +738,7 @@ class RecommendationData:
         )
         metadata["category"] = "Electronics"
         metadata["product_name"] = "Product " + metadata["prod_id"].astype(str)
-        return metadata, "Using fallback metadata"
+        return metadata
 
     def _compute_rank_scores(self) -> pd.DataFrame:
         scores = (
@@ -747,7 +762,7 @@ class RecommendationData:
             "metadata_source": f"{self.metadata_source}, {self.data_source}",
             "warning": (
                 "Fallback metadata is enough for a runnable demo. Add "
-                "data/input/products.csv or data/model_input/content_based/products.csv "
+                "data/model_input/content_based/products.csv "
                 "with category, brand, title, and description for a stronger content-based demo."
                 if not any(path.exists() for path in PRODUCT_METADATA_PATHS)
                 else "Product metadata file detected."
@@ -801,7 +816,26 @@ class RecommendationData:
         recommendations["source"] = "Rank-Based"
         return recommendations
 
-    def svd_recommendations(self, user_id: str, top_n: int) -> pd.DataFrame:
+    def _candidate_products(self, user_id: str, limit: int = DEMO_CANDIDATE_LIMIT) -> list[str]:
+        seen_products = set(self.df.loc[self.df["user_id"] == user_id, "prod_id"])
+        ranked_candidates = self.rank_scores[
+            ~self.rank_scores["prod_id"].isin(seen_products)
+        ].sort_values(["score", "rating_count"], ascending=[False, False])
+
+        if limit:
+            ranked_candidates = ranked_candidates.head(limit)
+
+        candidates = ranked_candidates["prod_id"].astype(str).tolist()
+        if candidates:
+            return candidates
+
+        return [
+            prod_id
+            for prod_id in self.product_metadata["prod_id"].drop_duplicates().astype(str)
+            if prod_id not in seen_products
+        ][:limit]
+
+    def _svd_candidate_scores(self, user_id: str) -> pd.DataFrame:
         if self.svd_model is None:
             raise RuntimeError(
                 "SVD Collaborative Filtering is unavailable. "
@@ -809,12 +843,7 @@ class RecommendationData:
                 "with scikit-surprise installed, or retrain/export the SVD model first."
             )
 
-        seen_products = set(self.df.loc[self.df["user_id"] == user_id, "prod_id"])
-        candidate_products = [
-            prod_id
-            for prod_id in self.product_metadata["prod_id"].drop_duplicates()
-            if prod_id not in seen_products
-        ]
+        candidate_products = self._candidate_products(user_id)
 
         predictions = [
             {
@@ -823,14 +852,17 @@ class RecommendationData:
             }
             for prod_id in candidate_products
         ]
-        recommendations = pd.DataFrame(predictions)
+        return pd.DataFrame(predictions)
+
+    def svd_recommendations(self, user_id: str, top_n: int) -> pd.DataFrame:
+        recommendations = self._svd_candidate_scores(user_id)
         recommendations = recommendations.sort_values("score", ascending=False).head(top_n)
         recommendations = self._merge_metadata(recommendations)
         recommendations["source"] = "SVD Collaborative Filtering"
         return recommendations
 
     def hybrid_recommendations(self, user_id: str, top_n: int) -> pd.DataFrame:
-        svd_recommendations = self.svd_recommendations(user_id, top_n=len(self.product_metadata))
+        svd_recommendations = self._svd_candidate_scores(user_id)
         rank_lookup = self.rank_scores.set_index("prod_id")["score"].to_dict()
         svd_recommendations["rank_score"] = (
             svd_recommendations["prod_id"].map(rank_lookup).fillna(self.df["rating"].mean())
@@ -845,11 +877,19 @@ class RecommendationData:
         return svd_recommendations
 
     def content_recommendations(self, user_id: str, top_n: int) -> pd.DataFrame:
+        candidate_ids = set(self._candidate_products(user_id, limit=DEMO_CANDIDATE_LIMIT))
+        history_ids = set(self.df.loc[self.df["user_id"] == user_id, "prod_id"].astype(str))
+        product_subset = self.product_metadata[
+            self.product_metadata["prod_id"].astype(str).isin(candidate_ids | history_ids)
+        ].copy()
+        if product_subset.empty:
+            product_subset = self.product_metadata.head(DEMO_CANDIDATE_LIMIT).copy()
+
         recommendations = content_based_filtering(
             user_id=user_id,
             purchases=self.purchases,
             browsing_history=self.browsing_history,
-            products=self.product_metadata,
+            products=product_subset,
             top_n=top_n,
             item_col="prod_id",
         )
@@ -910,7 +950,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
         user_id = str(payload.get("user_id", ""))
-        method = payload.get("method", "content")
+        method = payload.get("method", "rank")
         top_n = max(1, min(int(payload.get("top_n", 10)), 50))
 
         try:
@@ -955,6 +995,9 @@ class DemoHandler(BaseHTTPRequestHandler):
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Demo-Version", APP_VERSION)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -980,6 +1023,9 @@ class DemoHandler(BaseHTTPRequestHandler):
         body = json.dumps(sanitize(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Demo-Version", APP_VERSION)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -987,8 +1033,21 @@ class DemoHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    server = ThreadingHTTPServer((HOST, PORT), DemoHandler)
-    print(f"Recommendation demo running at http://{HOST}:{PORT}")
+    server = None
+    active_port = PORT
+    for candidate_port in [PORT, *FALLBACK_PORTS]:
+        try:
+            server = ThreadingHTTPServer((HOST, candidate_port), DemoHandler)
+            active_port = candidate_port
+            break
+        except OSError:
+            continue
+
+    if server is None:
+        raise OSError(f"Could not bind demo server on ports: {[PORT, *FALLBACK_PORTS]}")
+
+    print(f"Recommendation demo running at http://{HOST}:{active_port}")
+    print(f"Demo version: {APP_VERSION}")
     print("Press Ctrl+C to stop.")
     server.serve_forever()
 
