@@ -47,6 +47,7 @@ seaborn==0.13.2
 setuptools==75.1.0
 six==1.16.0
 stack-data==0.6.2
+streamlit==1.45.1
 statsmodels==0.14.4
 threadpoolctl==3.5.0
 tornado==6.4.1
